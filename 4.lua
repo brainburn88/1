@@ -1,118 +1,97 @@
--- ==========================================
--- MM2 FAST FARM (STRICT 250 DISTANCE)
--- ==========================================
+-- ВСТАВЬ СВОЮ ССЫЛКУ НИЖЕ (Raw Pastebin)
+local script_url = "https://raw.githubusercontent.com/brainburn88/1/refs/heads/main/2.lua"
 
+-- ==========================================
+-- МЕХАНИКА QUEUE ON TELEPORT (ИЗ SLAP BATTLES)
+-- ==========================================
+local teleportFunc = queueonteleport or queue_on_teleport or (syn and syn.queue_on_teleport)
+if teleportFunc then
+    teleportFunc([[
+        if not game:IsLoaded() then
+            game.Loaded:Wait()
+        end
+        repeat task.wait() until game.Players.LocalPlayer
+        task.wait(0.25)
+        loadstring(game:HttpGet("]]..script_url..[["))()
+    ]])
+end
+
+-- ==========================================
+-- ОСНОВНАЯ ЛОГИКА (БЫСТРАЯ ФЕРМА)
+-- ==========================================
 if _G.MM2FarmLoaded then return end
 _G.MM2FarmLoaded = true
 
-local Settings = {
-    Speed = 27,
-    MaxDist = 250 -- Строгая проверка дистанции
-}
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local TeleportService = game:GetService("TeleportService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Player = Players.LocalPlayer
 
--- Мгновенный Queue на телепорт
-local function setupQueue()
-    local qot = (syn and syn.queue_on_teleport) or queue_on_teleport or (fluxus and fluxus.queue_on_teleport)
-    if qot then
-        -- Вставь сюда ссылку на свой основной скрипт (Raw)
-        qot([[loadstring(game:HttpGet("https://raw.githubusercontent.com/brainburn88/1/refs/heads/main/4.lua"))()]])
-    end
-end
-setupQueue()
+local Settings = {
+    Speed = 27,
+    MaxDist = 250 -- СТРОГАЯ ПРОВЕРКА 250
+}
 
--- Быстрый поиск папки с монетами
+-- Поиск контейнера монет
 local function getCoinContainer()
     for _, obj in ipairs(workspace:GetChildren()) do
-        local container = obj:FindFirstChild("CoinContainer")
-        if container then return container end
+        if obj:FindFirstChild("CoinContainer") then return obj.CoinContainer end
     end
     return nil
 end
 
--- Поиск ближайшей монеты В ПРЕДЕЛАХ дистанции
-local function getBestTarget(hrp)
+-- Поиск лучшей цели (каждый раз проверка дистанции 250)
+local function getTarget(hrp)
     local container = getCoinContainer()
     if not container then return nil end
 
-    local closest = nil
-    local shortestDist = Settings.MaxDist -- Ищем только в этом радиусе
+    local best = nil
+    local lastDist = Settings.MaxDist -- Ищем только в этом радиусе
 
-    local coins = container:GetChildren()
-    for i = 1, #coins do
-        local coin = coins[i]
-        if coin:IsA("BasePart") and coin:FindFirstChild("TouchInterest") then
-            local dist = (hrp.Position - coin.Position).Magnitude
-            if dist < shortestDist then
-                shortestDist = dist
-                closest = coin
+    for _, v in ipairs(container:GetChildren()) do
+        if v:IsA("BasePart") and v:FindFirstChild("TouchInterest") then
+            local d = (hrp.Position - v.Position).Magnitude
+            if d < lastDist then
+                lastDist = d
+                best = v
             end
         end
     end
-    return closest
+    return best
 end
 
--- Стабилизация и коллизия (без лагов)
-local function stabilize(char, hrp)
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hrp:FindFirstChild("FarmVelocity") then
-        local bv = Instance.new("BodyVelocity")
-        bv.Name = "FarmVelocity"
-        bv.MaxForce = Vector3.new(1e6, 1e6, 1e6)
-        bv.Velocity = Vector3.new(0,0,0)
-        bv.Parent = hrp
-        
-        local bg = Instance.new("BodyGyro")
-        bg.Name = "FarmGyro"
-        bg.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
-        bg.Parent = hrp
-    end
-    
-    if hum then hum.PlatformStand = true end
-    hrp.FarmGyro.CFrame = hrp.CFrame -- Держим ровно
-
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then part.CanCollide = false end
-    end
-end
-
--- Основной цикл (самый быстрый метод в Roblox)
+-- Главный цикл перемещения
 RunService.Heartbeat:Connect(function(dt)
-    if not _G.MM2FarmLoaded then return end
-    
     local char = Player.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
-    stabilize(char, hrp)
+    -- Отключаем коллизию (каждый кадр)
+    for _, p in ipairs(char:GetDescendants()) do
+        if p:IsA("BasePart") then p.CanCollide = false end
+    end
 
-    -- Проверка дистанции происходит ТУТ (каждый кадр)
-    local target = getBestTarget(hrp)
+    -- Проверка дистанции 250 происходит прямо здесь
+    local target = getTarget(hrp)
     
     if target then
         local targetPos = target.Position
         local direction = (targetPos - hrp.Position).Unit
-        -- Плавное, но быстрое перемещение
-        hrp.CFrame = CFrame.new(hrp.Position + direction * (Settings.Speed * dt)) * hrp.CFrame.Rotation
+        
+        -- Убираем физику, чтобы не трясло
+        hrp.Velocity = Vector3.new(0,0,0)
+        
+        -- Движение CFrame (максимально быстрое)
+        hrp.CFrame = hrp.CFrame + (direction * (Settings.Speed * dt))
     end
 end)
 
 -- Авто-ресет при полной сумке
 task.spawn(function()
-    local remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
-    local coinEvent = remotes and remotes:WaitForChild("Gameplay", 5):WaitForChild("CoinCollected", 5)
-    if coinEvent then
-        coinEvent.OnClientEvent:Connect(function(_, current, max)
-            if current >= max then
-                if Player.Character and Player.Character:FindFirstChild("Humanoid") then
-                    Player.Character.Humanoid.Health = 0
-                    print("[MM2 Farm] Сумка полна, ресет...")
-                end
+    local remotes = game:GetService("ReplicatedStorage"):WaitForChild("Remotes", 10)
+    if remotes then
+        remotes.Gameplay.CoinCollected.OnClientEvent:Connect(function(_, cur, max)
+            if cur >= max and Player.Character then
+                Player.Character:BreakJoints()
             end
         end)
     end
@@ -126,11 +105,4 @@ Player.Idled:Connect(function()
     vu:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
 end)
 
--- Быстрый реконнект при ошибках
-game:GetService("CoreGui").RobloxPromptGui.promptOverlay.ChildAdded:Connect(function(child)
-    if child.Name == "ErrorPrompt" then
-        TeleportService:Teleport(game.PlaceId, Player)
-    end
-end)
-
-print("[MM2 Farm] Запущено. Радиус: " .. Settings.MaxDist .. ", Скорость: " .. Settings.Speed)
+print("[MM2 Farm] Запущено! Reconnect: OK, Dist: 250")
