@@ -29,37 +29,52 @@ local Settings = {
     MaxDist = 250
 }
 
--- 1. ЗАМОРОЗКА (КОПИЯ ИЗ ТВОЕГО ПЕРВОГО СКРИПТА)
+-- 1. ФУНКЦИЯ ЗАМОРОЗКИ (ТВОЙ МЕТОД, НО УСИЛЕННЫЙ)
+local function applyFreeze(char)
+    if not char then return end
+    local hrp = char:WaitForChild("HumanoidRootPart", 5)
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then return end
+
+    -- Создаем или обновляем Velocity
+    local bv = hrp:FindFirstChild("StableVelocity")
+    if not bv then
+        bv = Instance.new("BodyVelocity")
+        bv.Name = "StableVelocity"
+        bv.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+        bv.Velocity = Vector3.new(0, 0, 0)
+        bv.Parent = hrp
+    end
+
+    -- Создаем или обновляем Gyro
+    local bg = hrp:FindFirstChild("StableGyro")
+    if not bg then
+        bg = Instance.new("BodyGyro")
+        bg.Name = "StableGyro"
+        bg.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
+        bg.Parent = hrp
+    end
+    bg.CFrame = hrp.CFrame
+
+    hum.PlatformStand = true
+end
+
+-- Обновление при каждом спавне
+Player.CharacterAdded:Connect(function(char)
+    task.wait(0.5)
+    applyFreeze(char)
+end)
+
+-- Постоянная проверка в цикле (чтобы не упал)
 RunService.Stepped:Connect(function()
-    pcall(function()
-        local char = Player.Character
-        if not char then return end
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if not hrp then return end
-        local hum = char:FindFirstChildOfClass("Humanoid")
-
-        if not hrp:FindFirstChild("StableVelocity") then
-            local bv = Instance.new("BodyVelocity")
-            bv.Name = "StableVelocity"
-            bv.MaxForce = Vector3.new(1e6, 1e6, 1e6)
-            bv.Velocity = Vector3.new(0, 0, 0)
-            bv.Parent = hrp
-        end
-
-        if not hrp:FindFirstChild("StableGyro") then
-            local bg = Instance.new("BodyGyro")
-            bg.Name = "StableGyro"
-            bg.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
-            bg.Parent = hrp
-        end
-        hrp.StableGyro.CFrame = hrp.CFrame
-
-        if hum then hum.PlatformStand = true end
-        
+    local char = Player.Character
+    if char then
+        applyFreeze(char)
+        -- Ноклип
         for _, part in pairs(char:GetDescendants()) do
             if part:IsA("BasePart") then part.CanCollide = false end
         end
-    end)
+    end
 end)
 
 -- 2. ПОИСК СЛУЧАЙНОЙ МОНЕТЫ ИЗ 3-х БЛИЖАЙШИХ
@@ -93,7 +108,7 @@ local function getBestRandomTarget(hrp)
     return coinsInRange[math.random(1, count)].obj
 end
 
--- 3. ЦИКЛ ПЕРЕМЕЩЕНИЯ (Heartbeat)
+-- 3. ЦИКЛ ПЕРЕМЕЩЕНИЯ
 local currentTarget = nil
 
 RunService.Heartbeat:Connect(function(dt)
@@ -103,7 +118,7 @@ RunService.Heartbeat:Connect(function(dt)
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
-    -- Если цели нет или она собрана, ищем новую
+    -- Если цели нет, ищем новую
     if not currentTarget or not currentTarget.Parent or not currentTarget:FindFirstChild("TouchInterest") then
         currentTarget = getBestRandomTarget(hrp)
     end
@@ -112,7 +127,7 @@ RunService.Heartbeat:Connect(function(dt)
         local targetPos = currentTarget.Position
         local currentPos = hrp.Position
         
-        -- Проверка дистанции (на случай если монетка далеко)
+        -- Проверка дистанции 250
         if (targetPos - currentPos).Magnitude > Settings.MaxDist + 5 then
             currentTarget = nil
             return
@@ -124,13 +139,12 @@ RunService.Heartbeat:Connect(function(dt)
     end
 end)
 
--- 4. АВТО-РЕСЕТ ПРИ ПОЛНОЙ СУМКЕ
+-- 4. АВТО-РЕСЕТ
 task.spawn(function()
-    local remotes = game:GetService("ReplicatedStorage"):WaitForChild("Remotes", 30)
-    local coinEvent = remotes:WaitForChild("Gameplay", 30):WaitForChild("CoinCollected", 30)
-    
-    coinEvent.OnClientEvent:Connect(function(_, current, max)
-        if tonumber(current) >= tonumber(max) and Player.Character then
+    local r = game:GetService("ReplicatedStorage"):WaitForChild("Remotes", 30)
+    local c = r:WaitForChild("Gameplay", 30):WaitForChild("CoinCollected", 30)
+    c.OnClientEvent:Connect(function(_, cur, max)
+        if tonumber(cur) >= tonumber(max) and Player.Character then
             Player.Character:BreakJoints()
         end
     end)
@@ -144,4 +158,4 @@ Player.Idled:Connect(function()
     vu:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
 end)
 
-print("[MM2 Farm] Запущено! Заморозка из 1-го скрипта. Рандом ТОП-3.")
+print("[MM2 Farm] Исправлено: Заморозка активна всегда, персонаж не упадет.")
