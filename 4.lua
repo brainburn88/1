@@ -2,7 +2,7 @@
 local script_url = "https://raw.githubusercontent.com/brainburn88/1/refs/heads/main/4.lua"
 
 -- ==========================================
--- МЕХАНИКА QUEUE ON TELEPORT (ИЗ SLAP BATTLES)
+-- МЕХАНИКА QUEUE ON TELEPORT
 -- ==========================================
 local teleportFunc = queueonteleport or queue_on_teleport or (syn and syn.queue_on_teleport)
 if teleportFunc then
@@ -32,18 +32,24 @@ local Settings = {
 
 local currentRotation = nil
 
--- 1. ПОЛНЫЙ НОКЛИП (Обязателен для Твинов)
+-- 1. ФИКС КАМЕРЫ (Чтобы не дрожала при проходе сквозь стены)
+-- Мы ставим режим Invisicam, чтобы камера игнорировала коллизию объектов
+Player.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Invisicam
+
+-- 2. ПОЛНЫЙ НОКЛИП
 RunService.Stepped:Connect(function()
     if not _G.MM2FarmLoaded then return end
     local char = Player.Character
     if char then
         for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then part.CanCollide = false end
+            if part:IsA("BasePart") then 
+                part.CanCollide = false 
+            end
         end
     end
 end)
 
--- 2. ПОИСК СЛУЧАЙНОЙ МОНЕТЫ ИЗ 3-х БЛИЖАЙШИХ
+-- 3. ПОИСК СЛУЧАЙНОЙ МОНЕТЫ
 local function getBestRandomTarget(hrp)
     local container = nil
     for _, obj in pairs(workspace:GetChildren()) do
@@ -71,41 +77,33 @@ local function getBestRandomTarget(hrp)
     return coinsInRange[math.random(1, count)].obj
 end
 
--- 3. ГЛАВНЫЙ ЦИКЛ С ТВИНОМ
+-- 4. ГЛАВНЫЙ ЦИКЛ С ТВИНОМ
 task.spawn(function()
     while _G.MM2FarmLoaded do
         local char = Player.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         
         if hrp then
-            -- Запоминаем поворот один раз
             if not currentRotation then currentRotation = hrp.CFrame.Rotation end
-            
             local target = getBestRandomTarget(hrp)
             
             if target then
-                -- А) РАССЧИТЫВАЕМ ВРЕМЯ (Дистанция / Скорость)
                 local dist = (target.Position - hrp.Position).Magnitude
                 local tweenTime = dist / Settings.Speed
                 
-                -- Создаем Твин
                 local tweenInfo = TweenInfo.new(tweenTime, Enum.EasingStyle.Linear)
                 local tween = TweenService:Create(hrp, tweenInfo, {
-                    -- Летим к монете, но сохраняем исходный поворот
                     CFrame = CFrame.new(target.Position) * currentRotation
                 })
                 
-                -- Б) ЛЕТИМ
                 tween:Play()
                 
-                -- Ждем окончания полета ИЛИ пока монета не исчезнет по пути
                 local completed = false
                 local conn
                 conn = tween.Completed:Connect(function() completed = true end)
                 
                 repeat 
                     task.wait() 
-                    -- Если монета пропала, пока мы летели, отменяем твин
                     if not target or not target.Parent or not target:FindFirstChild("TouchInterest") then
                         tween:Cancel()
                         completed = true
@@ -113,17 +111,14 @@ task.spawn(function()
                 until completed or not _G.MM2FarmLoaded
                 if conn then conn:Disconnect() end
 
-                -- В) СТОИМ И ЖДЕМ, ПОКА ЗАСЧИТАЕТ (TouchInterest исчезнет)
                 if target and target.Parent and target:FindFirstChild("TouchInterest") then
                     local waitStart = tick()
                     repeat 
-                        -- Удерживаем позицию на монетке
                         hrp.CFrame = CFrame.new(target.Position) * currentRotation
                         task.wait()
                     until not target or not target.Parent or not target:FindFirstChild("TouchInterest") or (tick() - waitStart > 3) or not _G.MM2FarmLoaded
                 end
             else
-                -- Если монет нет, стоим на месте
                 task.wait(0.5)
             end
         else
@@ -132,15 +127,18 @@ task.spawn(function()
     end
 end)
 
--- 4. АВТО-РЕСЕТ ПРИ ПОЛНОЙ СУМКЕ
+-- 5. АВТО-РЕСЕТ ПРИ ПОЛНОЙ СУМКЕ
 task.spawn(function()
     local r = game:GetService("ReplicatedStorage"):WaitForChild("Remotes", 30)
     local c = r:WaitForChild("Gameplay", 30):WaitForChild("CoinCollected", 30)
     c.OnClientEvent:Connect(function(_, cur, max)
         if tonumber(cur) >= tonumber(max) and Player.Character then
+            -- При ресете возвращаем камеру в дефолт на секунду, чтобы избежать багов сброса
+            Player.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Zoom
             _G.MM2FarmLoaded = false
             Player.Character:BreakJoints()
             task.wait(2)
+            Player.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Invisicam
             _G.MM2FarmLoaded = true
         end
     end)
@@ -154,4 +152,4 @@ Player.Idled:Connect(function()
     vu:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
 end)
 
-print("[MM2 Farm] Запущено! Tween-движение, Фикс поворота, Ожидание сбора.")
+print("[MM2 Farm] Запущено! Камера зафиксирована (Invisicam).")
