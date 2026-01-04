@@ -29,21 +29,27 @@ local Settings = {
     MaxDist = 250
 }
 
--- 1. ОТКЛЮЧЕНИЕ УПРАВЛЕНИЯ И КОЛЛИЗИИ
+local currentTarget = nil
+local isWaitingForCoin = false
+
+-- 1. БЛОКИРОВКА УПРАВЛЕНИЯ, ПАДЕНИЯ И КОЛЛИЗИИ
 RunService.Stepped:Connect(function()
     if not _G.MM2FarmLoaded then return end
     local char = Player.Character
     if char then
         local hrp = char:FindFirstChild("HumanoidRootPart")
         local hum = char:FindFirstChildOfClass("Humanoid")
-        if hrp then 
-            hrp.Anchored = true -- Персонаж не может двигаться сам и не падает
+        
+        if hrp then
+            hrp.Velocity = Vector3.new(0,0,0) -- Обнуляем падение
+            hrp.RotVelocity = Vector3.new(0,0,0)
         end
-        if hum then 
-            hum.PlatformStand = true 
-            hum.WalkSpeed = 0 -- Дополнительно блокируем бег
-            hum.JumpPower = 0
+        
+        if hum then
+            hum.PlatformStand = true -- Отключаем физику гуманоида
+            hum.WalkSpeed = 0
         end
+
         -- Ноклип
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then part.CanCollide = false end
@@ -79,7 +85,7 @@ local function getBestRandomTarget(hrp)
     return coinsInRange[math.random(1, count)].obj
 end
 
--- 3. ГЛАВНЫЙ ПРОЦЕСС СБОРА
+-- 3. ГЛАВНЫЙ ЦИКЛ ПЕРЕМЕЩЕНИЯ И ОЖИДАНИЯ
 task.spawn(function()
     while _G.MM2FarmLoaded do
         local char = Player.Character
@@ -89,45 +95,45 @@ task.spawn(function()
             local target = getBestRandomTarget(hrp)
             
             if target then
-                -- А) ЛЕТИМ К МОНЕТКЕ
+                -- А) ПОЛЕТ К ЦЕЛИ
                 while target and target.Parent and target:FindFirstChild("TouchInterest") and _G.MM2FarmLoaded do
                     local hrpPos = hrp.Position
                     local targetPos = target.Position
                     local dist = (targetPos - hrpPos).Magnitude
                     
-                    if dist < 0.5 then break end -- Долетели
-                    if dist > Settings.MaxDist + 10 then break end -- Слишком далеко
+                    if dist < 0.5 then break end -- Долетели вплотную
+                    if dist > Settings.MaxDist + 20 then break end -- Цель исчезла/далеко
                     
                     local direction = (targetPos - hrpPos).Unit
                     local dt = RunService.Heartbeat:Wait()
                     
+                    -- Двигаем персонажа (CFrame форсинг заменяет заморозку)
                     hrp.CFrame = CFrame.new(hrpPos + direction * (Settings.Speed * dt), targetPos)
                 end
                 
-                -- Б) ЖДЕМ, ПОКА TOUCH INTEREST ПРОПАДЕТ (МОНЕТКА СОБРАНА)
+                -- Б) ОЖИДАНИЕ СБОРА (ПОКА ПРОПАДЕТ TOUCHINTEREST)
                 if target and target:FindFirstChild("TouchInterest") then
-                    -- Фиксируем позицию на монетке
-                    local connection
-                    connection = RunService.Heartbeat:Connect(function()
-                        if target and target.Parent and target:FindFirstChild("TouchInterest") then
-                            hrp.CFrame = CFrame.new(target.Position)
-                        else
-                            connection:Disconnect()
-                        end
-                    end)
+                    isWaitingForCoin = true
                     
-                    -- Ждем исчезновения TouchInterest
-                    repeat task.wait() 
-                    until not target or not target.Parent or not target:FindFirstChild("TouchInterest") or not _G.MM2FarmLoaded
+                    -- Удерживаем позицию на монетке, пока она не соберется
+                    local waitStart = tick()
+                    repeat 
+                        hrp.CFrame = CFrame.new(target.Position) -- "Прилипаем" к монетке
+                        RunService.Heartbeat:Wait()
+                    until not target or not target.Parent or not target:FindFirstChild("TouchInterest") or (tick() - waitStart > 3) or not _G.MM2FarmLoaded
                     
-                    if connection then connection:Disconnect() end
+                    isWaitingForCoin = false
                 end
             else
-                task.wait(0.5) -- Нет монет в радиусе 250, ждем появления
+                -- Если монет нет, просто держим текущую позицию, чтобы не падать
+                local stayPos = hrp.CFrame
+                repeat 
+                    hrp.CFrame = stayPos
+                    RunService.Heartbeat:Wait()
+                until getBestRandomTarget(hrp) or not _G.MM2FarmLoaded
             end
-        else
-            task.wait(1)
         end
+        task.wait()
     end
 end)
 
@@ -139,7 +145,7 @@ task.spawn(function()
         if tonumber(cur) >= tonumber(max) and Player.Character then
             _G.MM2FarmLoaded = false
             Player.Character:BreakJoints()
-            task.wait(3)
+            task.wait(2)
             _G.MM2FarmLoaded = true
         end
     end)
@@ -153,4 +159,4 @@ Player.Idled:Connect(function()
     vu:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
 end)
 
-print("[MM2 Farm] Запущено! Режим ожидания монеты активен.")
+print("[MM2 Farm] Запущено: Без Anchored, ожидание TouchInterest, рандом ТОП-3.")
