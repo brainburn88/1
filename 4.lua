@@ -21,6 +21,7 @@ if _G.MM2FarmLoaded then return end
 _G.MM2FarmLoaded = true
 
 local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local Player = Players.LocalPlayer
 
@@ -29,28 +30,13 @@ local Settings = {
     MaxDist = 250
 }
 
-local currentTarget = nil
-local isWaitingForCoin = false
+local currentRotation = nil
 
--- 1. БЛОКИРОВКА УПРАВЛЕНИЯ, ПАДЕНИЯ И КОЛЛИЗИИ
+-- 1. ПОЛНЫЙ НОКЛИП (Обязателен для Твинов)
 RunService.Stepped:Connect(function()
     if not _G.MM2FarmLoaded then return end
     local char = Player.Character
     if char then
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        
-        if hrp then
-            hrp.Velocity = Vector3.new(0,0,0) -- Обнуляем падение
-            hrp.RotVelocity = Vector3.new(0,0,0)
-        end
-        
-        if hum then
-            hum.PlatformStand = true -- Отключаем физику гуманоида
-            hum.WalkSpeed = 0
-        end
-
-        -- Ноклип
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then part.CanCollide = false end
         end
@@ -85,55 +71,64 @@ local function getBestRandomTarget(hrp)
     return coinsInRange[math.random(1, count)].obj
 end
 
--- 3. ГЛАВНЫЙ ЦИКЛ ПЕРЕМЕЩЕНИЯ И ОЖИДАНИЯ
+-- 3. ГЛАВНЫЙ ЦИКЛ С ТВИНОМ
 task.spawn(function()
     while _G.MM2FarmLoaded do
         local char = Player.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         
         if hrp then
+            -- Запоминаем поворот один раз
+            if not currentRotation then currentRotation = hrp.CFrame.Rotation end
+            
             local target = getBestRandomTarget(hrp)
             
             if target then
-                -- А) ПОЛЕТ К ЦЕЛИ
-                while target and target.Parent and target:FindFirstChild("TouchInterest") and _G.MM2FarmLoaded do
-                    local hrpPos = hrp.Position
-                    local targetPos = target.Position
-                    local dist = (targetPos - hrpPos).Magnitude
-                    
-                    if dist < 0.5 then break end -- Долетели вплотную
-                    if dist > Settings.MaxDist + 20 then break end -- Цель исчезла/далеко
-                    
-                    local direction = (targetPos - hrpPos).Unit
-                    local dt = RunService.Heartbeat:Wait()
-                    
-                    -- Двигаем персонажа (CFrame форсинг заменяет заморозку)
-                    hrp.CFrame = CFrame.new(hrpPos + direction * (Settings.Speed * dt), targetPos)
-                end
+                -- А) РАССЧИТЫВАЕМ ВРЕМЯ (Дистанция / Скорость)
+                local dist = (target.Position - hrp.Position).Magnitude
+                local tweenTime = dist / Settings.Speed
                 
-                -- Б) ОЖИДАНИЕ СБОРА (ПОКА ПРОПАДЕТ TOUCHINTEREST)
-                if target and target:FindFirstChild("TouchInterest") then
-                    isWaitingForCoin = true
-                    
-                    -- Удерживаем позицию на монетке, пока она не соберется
+                -- Создаем Твин
+                local tweenInfo = TweenInfo.new(tweenTime, Enum.EasingStyle.Linear)
+                local tween = TweenService:Create(hrp, tweenInfo, {
+                    -- Летим к монете, но сохраняем исходный поворот
+                    CFrame = CFrame.new(target.Position) * currentRotation
+                })
+                
+                -- Б) ЛЕТИМ
+                tween:Play()
+                
+                -- Ждем окончания полета ИЛИ пока монета не исчезнет по пути
+                local completed = false
+                local conn
+                conn = tween.Completed:Connect(function() completed = true end)
+                
+                repeat 
+                    task.wait() 
+                    -- Если монета пропала, пока мы летели, отменяем твин
+                    if not target or not target.Parent or not target:FindFirstChild("TouchInterest") then
+                        tween:Cancel()
+                        completed = true
+                    end
+                until completed or not _G.MM2FarmLoaded
+                if conn then conn:Disconnect() end
+
+                -- В) СТОИМ И ЖДЕМ, ПОКА ЗАСЧИТАЕТ (TouchInterest исчезнет)
+                if target and target.Parent and target:FindFirstChild("TouchInterest") then
                     local waitStart = tick()
                     repeat 
-                        hrp.CFrame = CFrame.new(target.Position) -- "Прилипаем" к монетке
-                        RunService.Heartbeat:Wait()
+                        -- Удерживаем позицию на монетке
+                        hrp.CFrame = CFrame.new(target.Position) * currentRotation
+                        task.wait()
                     until not target or not target.Parent or not target:FindFirstChild("TouchInterest") or (tick() - waitStart > 3) or not _G.MM2FarmLoaded
-                    
-                    isWaitingForCoin = false
                 end
             else
-                -- Если монет нет, просто держим текущую позицию, чтобы не падать
-                local stayPos = hrp.CFrame
-                repeat 
-                    hrp.CFrame = stayPos
-                    RunService.Heartbeat:Wait()
-                until getBestRandomTarget(hrp) or not _G.MM2FarmLoaded
+                -- Если монет нет, стоим на месте
+                task.wait(0.5)
             end
+        else
+            task.wait(1)
         end
-        task.wait()
     end
 end)
 
@@ -159,4 +154,4 @@ Player.Idled:Connect(function()
     vu:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
 end)
 
-print("[MM2 Farm] Запущено: Без Anchored, ожидание TouchInterest, рандом ТОП-3.")
+print("[MM2 Farm] Запущено! Tween-движение, Фикс поворота, Ожидание сбора.")
