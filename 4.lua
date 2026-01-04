@@ -1,23 +1,53 @@
+-- ==========================================
 -- УКАЖИ СВОЮ ССЫЛКУ (Raw Pastebin)
+-- ==========================================
 local script_url = "https://raw.githubusercontent.com/brainburn88/1/refs/heads/main/4.lua"
 
 -- ==========================================
--- МЕХАНИКА QUEUE ON TELEPORT
+-- МЕХАНИКА QUEUE ON TELEPORT (ОБЯЗАТЕЛЬНО В НАЧАЛЕ)
 -- ==========================================
 local teleportFunc = queueonteleport or queue_on_teleport or (syn and syn.queue_on_teleport)
 if teleportFunc then
     teleportFunc([[
         if not game:IsLoaded() then game.Loaded:Wait() end
         repeat task.wait() until game.Players.LocalPlayer
-        task.wait(1)
+        task.wait(2)
         loadstring(game:HttpGet("]]..script_url..[["))()
     ]])
 end
 
 -- ==========================================
--- ОСНОВНАЯ ЛОГИКА
+-- АВТО-РЕКОННЕКТ (ПРИ КИКЕ ИЛИ ВЫЛЕТЕ)
 -- ==========================================
-if _G.MM2FarmLoaded then return end
+task.spawn(function()
+    local TeleportService = game:GetService("TeleportService")
+    local GuiService = game:GetService("GuiService")
+    
+    -- Отслеживаем появление окна ошибки
+    GuiService.ErrorMessageChanged:Connect(function()
+        task.wait(1) -- Пауза, чтобы интерфейс прогрузился
+        TeleportService:Teleport(game.PlaceId, game.Players.LocalPlayer)
+    end)
+    
+    -- Запасной метод проверки (цикличный)
+    while task.wait(5) do
+        local coreGui = game:GetService("CoreGui")
+        if coreGui:FindFirstChild("RobloxPromptGui") then
+            local prompt = coreGui.RobloxPromptGui:FindFirstChild("promptOverlay")
+            if prompt and prompt:FindFirstChild("ErrorPrompt") then
+                TeleportService:Teleport(game.PlaceId, game.Players.LocalPlayer)
+            end
+        end
+    end
+end)
+
+-- ==========================================
+-- ОСНОВНАЯ ЛОГИКА ФАРМА
+-- ==========================================
+if _G.MM2FarmLoaded then 
+    _G.MM2FarmLoaded = false 
+    task.wait(0.5)
+end
 _G.MM2FarmLoaded = true
 
 local Players = game:GetService("Players")
@@ -27,38 +57,33 @@ local Player = Players.LocalPlayer
 
 local Settings = {
     Speed = 27,
-    MaxDist = 250
+    MaxDist = 300,
+    Resetting = false
 }
 
-local currentRotation = nil
-
--- 1. ФИКС КАМЕРЫ (Чтобы не дрожала при проходе сквозь стены)
--- Мы ставим режим Invisicam, чтобы камера игнорировала коллизию объектов
+-- Фикс камеры
 Player.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Invisicam
 
--- 2. ПОЛНЫЙ НОКЛИП
+-- Ноклип
 RunService.Stepped:Connect(function()
     if not _G.MM2FarmLoaded then return end
-    local char = Player.Character
-    if char then
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then 
-                part.CanCollide = false 
-            end
+    if Player.Character then
+        for _, part in ipairs(Player.Character:GetDescendants()) do
+            if part:IsA("BasePart") then part.CanCollide = false end
         end
     end
 end)
 
--- 3. ПОИСК СЛУЧАЙНОЙ МОНЕТЫ
-local function getBestRandomTarget(hrp)
+-- Поиск монет
+local function getBestRandomTarget()
     local container = nil
-    for _, obj in pairs(workspace:GetChildren()) do
-        if obj:FindFirstChild("CoinContainer") then 
-            container = obj.CoinContainer 
-            break 
-        end
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj.Name == "CoinContainer" then container = obj break end
     end
     if not container then return nil end
+    
+    local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
 
     local coinsInRange = {}
     for _, coin in pairs(container:GetChildren()) do
@@ -72,74 +97,75 @@ local function getBestRandomTarget(hrp)
 
     if #coinsInRange == 0 then return nil end
     table.sort(coinsInRange, function(a, b) return a.dist < b.dist end)
-    
     local count = math.min(3, #coinsInRange)
     return coinsInRange[math.random(1, count)].obj
 end
 
--- 4. ГЛАВНЫЙ ЦИКЛ С ТВИНОМ
+-- Цикл Твина
 task.spawn(function()
-    while _G.MM2FarmLoaded do
+    local currentRotation = nil
+    while true do
+        if not _G.MM2FarmLoaded then break end
+        
         local char = Player.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        
-        if hrp then
+        local hum = char and char:FindFirstChild("Humanoid")
+
+        if Settings.Resetting or not hrp or not hum or hum.Health <= 0 then
+            currentRotation = nil
+            task.wait(1)
+        else
             if not currentRotation then currentRotation = hrp.CFrame.Rotation end
-            local target = getBestRandomTarget(hrp)
+            local target = getBestRandomTarget()
             
             if target then
                 local dist = (target.Position - hrp.Position).Magnitude
                 local tweenTime = dist / Settings.Speed
-                
-                local tweenInfo = TweenInfo.new(tweenTime, Enum.EasingStyle.Linear)
-                local tween = TweenService:Create(hrp, tweenInfo, {
+                local tween = TweenService:Create(hrp, TweenInfo.new(tweenTime, Enum.EasingStyle.Linear), {
                     CFrame = CFrame.new(target.Position) * currentRotation
                 })
-                
                 tween:Play()
                 
                 local completed = false
-                local conn
-                conn = tween.Completed:Connect(function() completed = true end)
+                local conn = tween.Completed:Connect(function() completed = true end)
                 
-                repeat 
-                    task.wait() 
+                while not completed and _G.MM2FarmLoaded and not Settings.Resetting do
                     if not target or not target.Parent or not target:FindFirstChild("TouchInterest") then
                         tween:Cancel()
-                        completed = true
+                        break
                     end
-                until completed or not _G.MM2FarmLoaded
+                    task.wait()
+                end
                 if conn then conn:Disconnect() end
 
-                if target and target.Parent and target:FindFirstChild("TouchInterest") then
+                if target and target.Parent and target:FindFirstChild("TouchInterest") and not Settings.Resetting then
                     local waitStart = tick()
                     repeat 
-                        hrp.CFrame = CFrame.new(target.Position) * currentRotation
+                        if hrp and hrp.Parent then hrp.CFrame = CFrame.new(target.Position) * currentRotation end
                         task.wait()
-                    until not target or not target.Parent or not target:FindFirstChild("TouchInterest") or (tick() - waitStart > 3) or not _G.MM2FarmLoaded
+                    until not target or not target.Parent or not target:FindFirstChild("TouchInterest") or (tick() - waitStart > 2) or Settings.Resetting
                 end
             else
                 task.wait(0.5)
             end
-        else
-            task.wait(1)
         end
+        task.wait()
     end
 end)
 
--- 5. АВТО-РЕСЕТ ПРИ ПОЛНОЙ СУМКЕ
+-- Авто-ресет
 task.spawn(function()
-    local r = game:GetService("ReplicatedStorage"):WaitForChild("Remotes", 30)
-    local c = r:WaitForChild("Gameplay", 30):WaitForChild("CoinCollected", 30)
-    c.OnClientEvent:Connect(function(_, cur, max)
-        if tonumber(cur) >= tonumber(max) and Player.Character then
-            -- При ресете возвращаем камеру в дефолт на секунду, чтобы избежать багов сброса
+    local remotes = game:GetService("ReplicatedStorage"):WaitForChild("Remotes", 30)
+    local coinEvent = remotes:WaitForChild("Gameplay"):WaitForChild("CoinCollected")
+
+    coinEvent.OnClientEvent:Connect(function(_, cur, max)
+        if tonumber(cur) >= tonumber(max) and Player.Character and not Settings.Resetting then
+            Settings.Resetting = true
             Player.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Zoom
-            _G.MM2FarmLoaded = false
             Player.Character:BreakJoints()
-            task.wait(2)
+            task.wait(3)
             Player.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Invisicam
-            _G.MM2FarmLoaded = true
+            Settings.Resetting = false
         end
     end)
 end)
@@ -152,4 +178,4 @@ Player.Idled:Connect(function()
     vu:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
 end)
 
-print("[MM2 Farm] Запущено! Камера зафиксирована (Invisicam).")
+print("[MM2 Farm] Запущено с Auto-Rejoin.")
