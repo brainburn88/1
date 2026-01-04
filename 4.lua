@@ -9,7 +9,7 @@ if teleportFunc then
     teleportFunc([[
         if not game:IsLoaded() then game.Loaded:Wait() end
         repeat task.wait() until game.Players.LocalPlayer
-        task.wait(1) -- Увеличил ожидание для надежности
+        task.wait(1.5) -- Ждем подольше для полной загрузки карты и персонажа
         loadstring(game:HttpGet("]]..script_url..[["))()
     ]])
 end
@@ -29,33 +29,46 @@ local Settings = {
     MaxDist = 250
 }
 
--- Функция для ПОЛНОЙ очистки физики и коллизии (то, что не работало)
-local function stabilizeCharacter(char)
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    
-    if hrp and hum then
-        -- "Заморозка"
-        hum.PlatformStand = true
-        hrp.Velocity = Vector3.new(0,0,0)
-        hrp.RotVelocity = Vector3.new(0,0,0)
+-- ПОЛНАЯ ЗАМОРОЗКА И ОТКЛЮЧЕНИЕ КОЛЛИЗИИ
+-- Используем Stepped, так как он срабатывает ПЕРЕД физикой
+RunService.Stepped:Connect(function()
+    if not _G.MM2FarmLoaded then return end
+    local char = Player.Character
+    if char then
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChildOfClass("Humanoid")
         
-        -- Отключение коллизии (проход через стены)
+        if hrp then
+            -- 1. Полная заморозка (Якорь)
+            -- Это на 100% останавливает гравитацию и любые толчки
+            hrp.Anchored = true 
+            hrp.Velocity = Vector3.new(0,0,0)
+        end
+        
+        if hum then
+            hum.PlatformStand = true -- Отключает состояние ходьбы/падения
+        end
+
+        -- 2. Полное отключение коллизии всех частей тела
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.CanCollide = false
-                part.Velocity = Vector3.new(0,0,0) -- Чтобы не дергало
+                part.CanTouch = true -- Оставляем для сбора монет
             end
         end
     end
-end
+end)
 
--- Поиск монеты в радиусе 250
+-- Функция поиска монеты (строго 250 дистанция)
 local function getTarget(hrp)
     local container = nil
     for _, v in ipairs(workspace:GetChildren()) do
-        if v:FindFirstChild("CoinContainer") then container = v.CoinContainer break end
+        if v:FindFirstChild("CoinContainer") then 
+            container = v.CoinContainer 
+            break 
+        end
     end
+    
     if not container then return nil end
 
     local best = nil
@@ -73,38 +86,37 @@ local function getTarget(hrp)
     return best
 end
 
--- ГЛАВНЫЙ ЦИКЛ (Heartbeat)
+-- ЦИКЛ ПЕРЕМЕЩЕНИЯ (Heartbeat)
 RunService.Heartbeat:Connect(function(dt)
     if not _G.MM2FarmLoaded then return end
     
     local char = Player.Character
-    if not char then return end
-    
-    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
-    -- ПРИНУДИТЕЛЬНО каждый кадр отключаем коллизию и физику
-    stabilizeCharacter(char)
-
-    -- Поиск цели (строго 250)
     local target = getTarget(hrp)
     
     if target then
+        -- Движение через CFrame (так как Anchored = true, это единственный способ)
         local targetPos = target.Position
         local direction = (targetPos - hrp.Position).Unit
         
-        -- Мгновенное перемещение CFrame
+        -- Перемещаем персонажа к монете
         hrp.CFrame = hrp.CFrame + (direction * (Settings.Speed * dt))
     end
 end)
 
--- Авто-ресет
+-- Авто-ресет при полной сумке
 task.spawn(function()
-    local remotes = game:GetService("ReplicatedStorage"):WaitForChild("Remotes", 10)
+    local remotes = game:GetService("ReplicatedStorage"):WaitForChild("Remotes", 20)
     if remotes then
-        remotes.Gameplay.CoinCollected.OnClientEvent:Connect(function(_, cur, max)
-            if cur >= max and Player.Character then
+        local coinEvent = remotes:WaitForChild("Gameplay"):WaitForChild("CoinCollected")
+        coinEvent.OnClientEvent:Connect(function(_, cur, max)
+            if tonumber(cur) >= tonumber(max) and Player.Character then
+                _G.MM2FarmLoaded = false -- Останавливаем циклы перед ресетом
                 Player.Character:BreakJoints()
+                task.wait(2)
+                _G.MM2FarmLoaded = true
             end
         end)
     end
@@ -118,4 +130,4 @@ Player.Idled:Connect(function()
     vu:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
 end)
 
-print("[MM2 Farm] Запущено! Стабилизация активна.")
+print("[MM2 Farm] ТОТАЛЬНАЯ ЗАМОРОЗКА И КОЛЛИЗИЯ ВКЛЮЧЕНЫ.")
