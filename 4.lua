@@ -29,49 +29,23 @@ local Settings = {
     MaxDist = 250
 }
 
--- 1. ФУНКЦИЯ ЗАМОРОЗКИ (ТВОЙ МЕТОД, НО УСИЛЕННЫЙ)
-local function applyFreeze(char)
-    if not char then return end
-    local hrp = char:WaitForChild("HumanoidRootPart", 5)
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum then return end
-
-    -- Создаем или обновляем Velocity
-    local bv = hrp:FindFirstChild("StableVelocity")
-    if not bv then
-        bv = Instance.new("BodyVelocity")
-        bv.Name = "StableVelocity"
-        bv.MaxForce = Vector3.new(1e6, 1e6, 1e6)
-        bv.Velocity = Vector3.new(0, 0, 0)
-        bv.Parent = hrp
-    end
-
-    -- Создаем или обновляем Gyro
-    local bg = hrp:FindFirstChild("StableGyro")
-    if not bg then
-        bg = Instance.new("BodyGyro")
-        bg.Name = "StableGyro"
-        bg.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
-        bg.Parent = hrp
-    end
-    bg.CFrame = hrp.CFrame
-
-    hum.PlatformStand = true
-end
-
--- Обновление при каждом спавне
-Player.CharacterAdded:Connect(function(char)
-    task.wait(0.5)
-    applyFreeze(char)
-end)
-
--- Постоянная проверка в цикле (чтобы не упал)
+-- 1. ОТКЛЮЧЕНИЕ УПРАВЛЕНИЯ И КОЛЛИЗИИ
 RunService.Stepped:Connect(function()
+    if not _G.MM2FarmLoaded then return end
     local char = Player.Character
     if char then
-        applyFreeze(char)
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hrp then 
+            hrp.Anchored = true -- Персонаж не может двигаться сам и не падает
+        end
+        if hum then 
+            hum.PlatformStand = true 
+            hum.WalkSpeed = 0 -- Дополнительно блокируем бег
+            hum.JumpPower = 0
+        end
         -- Ноклип
-        for _, part in pairs(char:GetDescendants()) do
+        for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then part.CanCollide = false end
         end
     end
@@ -99,53 +73,74 @@ local function getBestRandomTarget(hrp)
     end
 
     if #coinsInRange == 0 then return nil end
-
-    -- Сортировка по дистанции
     table.sort(coinsInRange, function(a, b) return a.dist < b.dist end)
     
-    -- Выбор рандома из топ-3
     local count = math.min(3, #coinsInRange)
     return coinsInRange[math.random(1, count)].obj
 end
 
--- 3. ЦИКЛ ПЕРЕМЕЩЕНИЯ
-local currentTarget = nil
-
-RunService.Heartbeat:Connect(function(dt)
-    if not _G.MM2FarmLoaded then return end
-    
-    local char = Player.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    -- Если цели нет, ищем новую
-    if not currentTarget or not currentTarget.Parent or not currentTarget:FindFirstChild("TouchInterest") then
-        currentTarget = getBestRandomTarget(hrp)
-    end
-
-    if currentTarget then
-        local targetPos = currentTarget.Position
-        local currentPos = hrp.Position
+-- 3. ГЛАВНЫЙ ПРОЦЕСС СБОРА
+task.spawn(function()
+    while _G.MM2FarmLoaded do
+        local char = Player.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
         
-        -- Проверка дистанции 250
-        if (targetPos - currentPos).Magnitude > Settings.MaxDist + 5 then
-            currentTarget = nil
-            return
+        if hrp then
+            local target = getBestRandomTarget(hrp)
+            
+            if target then
+                -- А) ЛЕТИМ К МОНЕТКЕ
+                while target and target.Parent and target:FindFirstChild("TouchInterest") and _G.MM2FarmLoaded do
+                    local hrpPos = hrp.Position
+                    local targetPos = target.Position
+                    local dist = (targetPos - hrpPos).Magnitude
+                    
+                    if dist < 0.5 then break end -- Долетели
+                    if dist > Settings.MaxDist + 10 then break end -- Слишком далеко
+                    
+                    local direction = (targetPos - hrpPos).Unit
+                    local dt = RunService.Heartbeat:Wait()
+                    
+                    hrp.CFrame = CFrame.new(hrpPos + direction * (Settings.Speed * dt), targetPos)
+                end
+                
+                -- Б) ЖДЕМ, ПОКА TOUCH INTEREST ПРОПАДЕТ (МОНЕТКА СОБРАНА)
+                if target and target:FindFirstChild("TouchInterest") then
+                    -- Фиксируем позицию на монетке
+                    local connection
+                    connection = RunService.Heartbeat:Connect(function()
+                        if target and target.Parent and target:FindFirstChild("TouchInterest") then
+                            hrp.CFrame = CFrame.new(target.Position)
+                        else
+                            connection:Disconnect()
+                        end
+                    end)
+                    
+                    -- Ждем исчезновения TouchInterest
+                    repeat task.wait() 
+                    until not target or not target.Parent or not target:FindFirstChild("TouchInterest") or not _G.MM2FarmLoaded
+                    
+                    if connection then connection:Disconnect() end
+                end
+            else
+                task.wait(0.5) -- Нет монет в радиусе 250, ждем появления
+            end
+        else
+            task.wait(1)
         end
-
-        -- Движение
-        local direction = (targetPos - currentPos).Unit
-        hrp.CFrame = CFrame.new(currentPos + direction * (Settings.Speed * dt)) * hrp.CFrame.Rotation
     end
 end)
 
--- 4. АВТО-РЕСЕТ
+-- 4. АВТО-РЕСЕТ ПРИ ПОЛНОЙ СУМКЕ
 task.spawn(function()
     local r = game:GetService("ReplicatedStorage"):WaitForChild("Remotes", 30)
     local c = r:WaitForChild("Gameplay", 30):WaitForChild("CoinCollected", 30)
     c.OnClientEvent:Connect(function(_, cur, max)
         if tonumber(cur) >= tonumber(max) and Player.Character then
+            _G.MM2FarmLoaded = false
             Player.Character:BreakJoints()
+            task.wait(3)
+            _G.MM2FarmLoaded = true
         end
     end)
 end)
@@ -158,4 +153,4 @@ Player.Idled:Connect(function()
     vu:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
 end)
 
-print("[MM2 Farm] Исправлено: Заморозка активна всегда, персонаж не упадет.")
+print("[MM2 Farm] Запущено! Режим ожидания монеты активен.")
