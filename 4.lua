@@ -39,7 +39,7 @@ local GuiService = game:GetService("GuiService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Player = Players.LocalPlayer
 
-local Settings = { Speed = 26.5, MaxDist = 300, Resetting = false }
+local Settings = { Speed = 26, MaxDist = 200, Resetting = false }
 local isReconnecting = false
 
 -- ==========================================
