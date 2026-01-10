@@ -10,9 +10,9 @@ if teleportFunc then
     ]])
 end
 
--- ==========================================
+
 -- АВТО-РЕКОННЕКТ (ПРИ КИКЕ ИЛИ ВЫЛЕТЕ)
--- ==========================================
+
 task.spawn(function()
     local TeleportService = game:GetService("TeleportService")
     local GuiService = game:GetService("GuiService")
