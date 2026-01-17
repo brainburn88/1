@@ -10,29 +10,27 @@ if teleportFunc then
     ]])
 end
 
--- Полная очистка предыдущей сессии
 local function cleanup()
     _G.MM2FarmLoaded = false
     
-    -- Очистка старых соединений из _G
     if _G.MM2Connections then
-        for name, conn in pairs(_G.MM2Connections) do
-            if conn and typeof(conn) == "RBXScriptConnection" then
-                pcall(function() conn:Disconnect() end)
+        for _, conn in pairs(_G.MM2Connections) do
+            if typeof(conn) == "RBXScriptConnection" then
+                pcall(conn.Disconnect, conn)
             end
         end
         table.clear(_G.MM2Connections)
+        _G.MM2Connections = nil  -- ДОБАВЛЕНО
     end
     
-    if _G.CoinConn then
-        pcall(function() _G.CoinConn:Disconnect() end)
-        _G.CoinConn = nil
-    end
-    
-    -- Очистка кэшей
     if _G.MM2Settings then
-        _G.MM2Settings.CoinContainer = nil
         table.clear(_G.MM2Settings)
+        _G.MM2Settings = nil  -- ДОБАВЛЕНО
+    end
+    
+    if _G.MM2CoinBuffer then
+        table.clear(_G.MM2CoinBuffer)
+        _G.MM2CoinBuffer = nil  -- ДОБАВЛЕНО
     end
 end
 
@@ -43,7 +41,6 @@ end
 
 _G.MM2FarmLoaded = true
 
--- Кэширование сервисов
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
@@ -52,55 +49,53 @@ local TeleportService = game:GetService("TeleportService")
 local GuiService = game:GetService("GuiService")
 local VirtualUser = game:GetService("VirtualUser")
 
+-- ДОБАВЛЕНО: защита от nil Player
 local Player = Players.LocalPlayer
+if not Player then
+    Player = Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+    Player = Players.LocalPlayer
+end
 
--- Глобальные настройки для доступа при очистке
 _G.MM2Settings = {
     Speed = 25,
     MaxDist = 160,
-    MaxDistSq = 160 * 160, -- Предрасчет
+    MaxDistSq = 25600,
     Resetting = false,
     CoinContainer = nil,
-    LastContainerCheck = 0
+    LastContainerCheck = 0,
+    TeleportDebounce = false
 }
 local Settings = _G.MM2Settings
 
--- Глобальная таблица соединений
 _G.MM2Connections = {}
 local Connections = _G.MM2Connections
 
--- Переиспользуемая таблица для монет (избегаем создания новой каждый кадр)
-local coinBuffer = {}
-local coinBufferSize = 0
+_G.MM2CoinBuffer = {}
+local coinBuffer = _G.MM2CoinBuffer
 
-Player.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Invisicam
+pcall(function()
+    Player.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Invisicam
+end)
 
--- Безопасное отключение соединения
 local function safeDisconnect(name)
     local conn = Connections[name]
-    if conn and typeof(conn) == "RBXScriptConnection" then
-        pcall(function() conn:Disconnect() end)
+    if typeof(conn) == "RBXScriptConnection" then
+        pcall(conn.Disconnect, conn)
         Connections[name] = nil
     end
 end
 
--- Полная очистка при выгрузке
-local function fullCleanup()
-    _G.MM2FarmLoaded = false
-    
-    for name in pairs(Connections) do
-        safeDisconnect(name)
-    end
-    
-    Settings.CoinContainer = nil
-    table.clear(coinBuffer)
-    coinBufferSize = 0
+local function isAlive()
+    if not _G.MM2FarmLoaded then return false end
+    local char = Player.Character
+    if not char then return false end
+    local hum = char:FindFirstChild("Humanoid")
+    return hum and hum.Health > 0
 end
 
--- Ноклип
 Connections.Noclip = RunService.Stepped:Connect(function()
     if not _G.MM2FarmLoaded then 
-        fullCleanup()
+        cleanup()
         return 
     end
     
@@ -114,25 +109,24 @@ Connections.Noclip = RunService.Stepped:Connect(function()
     end
 end)
 
--- Кэшированный поиск контейнера
 local function getCoinContainer()
     local now = tick()
+    local cached = Settings.CoinContainer
     
-    -- Проверяем валидность кэша
-    if Settings.CoinContainer then
-        if not Settings.CoinContainer.Parent then
-            Settings.CoinContainer = nil -- Очищаем невалидную ссылку
-        elseif (now - Settings.LastContainerCheck) < 2 then
-            return Settings.CoinContainer
-        end
+    if cached and cached.Parent and (now - Settings.LastContainerCheck) < 2 then
+        return cached
     end
     
     Settings.LastContainerCheck = now
+    
+    if cached and not cached.Parent then
+        Settings.CoinContainer = nil
+    end
+    
     Settings.CoinContainer = workspace:FindFirstChild("CoinContainer", true)
     return Settings.CoinContainer
 end
 
--- Оптимизированный поиск монет с переиспользованием буфера
 local function getBestRandomTarget()
     local container = getCoinContainer()
     if not container then return nil end
@@ -145,65 +139,63 @@ local function getBestRandomTarget()
 
     local hrpPos = hrp.Position
     local maxDistSq = Settings.MaxDistSq
-    
-    -- Очищаем буфер (переиспользуем таблицу)
-    coinBufferSize = 0
+    local count = 0
 
     for _, coin in ipairs(container:GetChildren()) do
-        if coin:IsA("BasePart") then
-            local touch = coin:FindFirstChild("TouchInterest")
-            if touch then
-                local delta = hrpPos - coin.Position
-                local distSq = delta.X * delta.X + delta.Y * delta.Y + delta.Z * delta.Z
+        if coin:IsA("BasePart") and coin:FindFirstChild("TouchInterest") then
+            local delta = hrpPos - coin.Position
+            local distSq = delta.X * delta.X + delta.Y * delta.Y + delta.Z * delta.Z
+            
+            if distSq <= maxDistSq then
+                count += 1
+                local entry = coinBuffer[count]
                 
-                if distSq <= maxDistSq then
-                    coinBufferSize += 1
-                    
-                    -- Переиспользуем существующие записи или создаем новые
-                    if coinBuffer[coinBufferSize] then
-                        coinBuffer[coinBufferSize].obj = coin
-                        coinBuffer[coinBufferSize].dist = distSq
-                    else
-                        coinBuffer[coinBufferSize] = {obj = coin, dist = distSq}
-                    end
+                if entry then
+                    entry.obj = coin
+                    entry.dist = distSq
+                else
+                    coinBuffer[count] = {obj = coin, dist = distSq}
                 end
             end
         end
     end
 
-    if coinBufferSize == 0 then return nil end
+    if count == 0 then return nil end
     
-    if coinBufferSize > 1 then
-        -- Сортируем только используемую часть
+    for i = count + 1, #coinBuffer do
+        coinBuffer[i] = nil
+    end
+    
+    if count > 1 then
         table.sort(coinBuffer, function(a, b) 
-            if not a or not b then return false end
             return a.dist < b.dist 
         end)
     end
     
-    local selected = coinBuffer[math.random(1, math.min(3, coinBufferSize))]
-    return selected and selected.obj
+    return coinBuffer[math.random(1, math.min(3, count))].obj
 end
 
--- ОСНОВНОЙ ЦИКЛ ФАРМА
 task.spawn(function()
     local currentRotation = nil
     local activeTween = nil
     
+    local function cleanupTween()
+        if activeTween then
+            pcall(function() 
+                activeTween:Cancel()
+                activeTween:Destroy() 
+            end)
+            activeTween = nil
+        end
+    end
+    
     while _G.MM2FarmLoaded do
         local char = Player.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local hum = char and char:FindFirstChild("Humanoid")
-
-        if Settings.Resetting or not hrp or not hum or hum.Health <= 0 then
+        
+        if Settings.Resetting or not hrp or not isAlive() then
             currentRotation = nil
-            if activeTween then 
-                pcall(function() 
-                    activeTween:Cancel() 
-                    activeTween:Destroy() 
-                end)
-                activeTween = nil 
-            end
+            cleanupTween()
             task.wait(1)
             continue
         end
@@ -221,13 +213,7 @@ task.spawn(function()
         local dist = (targetPos - hrp.Position).Magnitude
         local tweenTime = dist / Settings.Speed
         
-        -- Уничтожаем предыдущий tween если есть
-        if activeTween then
-            pcall(function() 
-                activeTween:Cancel()
-                activeTween:Destroy() 
-            end)
-        end
+        cleanupTween()
         
         activeTween = TweenService:Create(hrp, TweenInfo.new(tweenTime, Enum.EasingStyle.Linear), {
             CFrame = CFrame.new(targetPos) * currentRotation
@@ -238,36 +224,23 @@ task.spawn(function()
         local startTime = tick()
         local maxWait = tweenTime + 0.3
         
-        repeat
+        while _G.MM2FarmLoaded and not Settings.Resetting do
+            if not target.Parent or not target:FindFirstChild("TouchInterest") then
+                break
+            end
+            if (tick() - startTime) > maxWait then
+                break
+            end
             task.wait(0.05)
-        until not _G.MM2FarmLoaded 
-            or Settings.Resetting 
-            or not target.Parent 
-            or not target:FindFirstChild("TouchInterest")
-            or (tick() - startTime) > maxWait
-        
-        -- Обязательно уничтожаем tween
-        if activeTween then
-            pcall(function() 
-                activeTween:Cancel()
-                activeTween:Destroy() 
-            end)
-            activeTween = nil
         end
         
+        cleanupTween()
         task.wait(0.03)
     end
     
-    -- Очистка при выходе из цикла
-    if activeTween then
-        pcall(function() 
-            activeTween:Cancel()
-            activeTween:Destroy() 
-        end)
-    end
+    cleanupTween()
 end)
 
--- Авто-ресет
 task.spawn(function()
     local remotes = ReplicatedStorage:WaitForChild("Remotes", 30)
     if not remotes then return end
@@ -281,10 +254,10 @@ task.spawn(function()
     safeDisconnect("Coin")
     
     Connections.Coin = coinEvent.OnClientEvent:Connect(function(_, cur, max)
-        if not _G.MM2FarmLoaded then return end
+        if not _G.MM2FarmLoaded or Settings.Resetting then return end
         
         local current, maximum = tonumber(cur), tonumber(max)
-        if current and maximum and current >= maximum and Player.Character and not Settings.Resetting then
+        if current and maximum and current >= maximum and Player.Character then
             Settings.Resetting = true
             pcall(function() Player.Character:BreakJoints() end)
             task.wait(3)
@@ -293,20 +266,22 @@ task.spawn(function()
     end)
 end)
 
--- Анти-АФК и Реконнект
 task.spawn(function()
     safeDisconnect("Error")
     safeDisconnect("Idle")
     
     Connections.Error = GuiService.ErrorMessageChanged:Connect(function()
-        if not _G.MM2FarmLoaded then return end
-        task.wait(1) 
-        pcall(function() TeleportService:Teleport(game.PlaceId, Player) end)
+        if not _G.MM2FarmLoaded or Settings.TeleportDebounce then return end
+        
+        Settings.TeleportDebounce = true
+        task.wait(1)
+        pcall(TeleportService.Teleport, TeleportService, game.PlaceId, Player)
     end)
     
     Connections.Idle = Player.Idled:Connect(function()
         if not _G.MM2FarmLoaded then return end
-        local cam = workspace.CurrentCamera
+        -- ИСПРАВЛЕНО: безопасная проверка камеры
+        local cam = workspace:FindFirstChild("Camera") or workspace.CurrentCamera
         if cam then
             VirtualUser:Button2Down(Vector2.zero, cam.CFrame)
             task.wait(1)
@@ -315,14 +290,13 @@ task.spawn(function()
     end)
 end)
 
--- Очистка при удалении персонажа (предотвращает утечки)
-Connections.CharRemoving = Player.CharacterRemoving:Connect(function(char)
-    -- Очищаем ссылки на части персонажа
+Connections.CharRemoving = Player.CharacterRemoving:Connect(function()
+    if not _G.MM2FarmLoaded then return end
     Settings.Resetting = true
-    task.wait(0.1)
 end)
 
-Connections.CharAdded = Player.CharacterAdded:Connect(function(char)
+Connections.CharAdded = Player.CharacterAdded:Connect(function()
+    if not _G.MM2FarmLoaded then return end
     task.wait(0.5)
     Settings.Resetting = false
 end)
