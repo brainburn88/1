@@ -41,7 +41,7 @@ local RunService = game:GetService("RunService")
 local Player = Players.LocalPlayer
 
 local Settings = {
-    Speed = 27,
+    Speed = 25,
     MaxDist = 150,
     Resetting = false
 }
