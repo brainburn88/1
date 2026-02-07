@@ -1,7 +1,7 @@
 local script_url = "https://raw.githubusercontent.com/brainburn88/1/refs/heads/main/5.lua"
 
 -- Автозапуск скрипта после перезахода
-local teleportFunc = queueonteleport or queue_on_teleport or (syn and syn.queue_on_teleport)
+local teleportFunc = queue_on_teleport
 if teleportFunc then
     teleportFunc([[
         if not game:IsLoaded() then game.Loaded:Wait() end
